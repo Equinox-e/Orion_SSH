@@ -120,9 +120,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "quick": "Быстрое подключение", "host": "Хост / IP", "port": "Порт", "username": "Пользователь",
         "protocol": "Протокол", "name": "Название", "password": "Пароль", "save_password": "Сохранить пароль в Windows Credential Manager",
         "auth": "Тип входа", "key_path": "Приватный ключ", "browse": "Обзор", "group": "Группа",
+        "all_groups": "Все группы", "group_filter": "Фильтр по группе", "add_new_group": "Добавить новую группу…", "new_group_placeholder": "Название новой группы", "create_group": "Добавить", "move_up": "Вверх", "move_down": "Вниз",
         "group_color": "Цвет группы", "favorite": "Избранное", "tags": "Теги через запятую", "start_dir": "Начальная папка",
         "notes": "Заметки", "tunnels": "SSH tunnels / port forwarding", "tunnels_hint": "Формат: L 127.0.0.1:8080 127.0.0.1:80 или 8080 -> 127.0.0.1:80",
-        "serial_port": "Serial-порт", "serial_baud": "Baud rate", "terminal_hint": "Кликните в терминал и печатайте как в PuTTY. Ctrl+C/Ctrl+X/Ctrl+O отправляются на сервер. Ctrl+Shift+C — копировать, Ctrl+Shift+V — вставить.",
+        "serial_port": "Serial-порт", "serial_baud": "Baud rate", "terminal_hint": "Кликните в терминал и печатайте как в PuTTY. Ctrl+C/Ctrl+X/Ctrl+O отправляются на сервер. Ctrl+Shift+C / Ctrl+Shift+X — копировать, Ctrl+Shift+V / Shift+Insert — вставить. В TUI-программах колесо мыши отправляет стрелки вверх/вниз на сервер.",
+        "split_horizontal": "Разделить ↔", "split_vertical": "Разделить ↕", "split_title": "Рабочая область",
+        "split_workspace": "Split workspace", "split_2_columns": "2 колонки", "split_2_rows": "2 строки", "split_4": "4 панели",
+        "select_session": "Выберите подключение", "open_in_pane": "Открыть", "replace_pane": "Заменить", "empty_pane": "Панель свободна",
         "files": "Файлы", "disconnect": "Отключить", "reconnect": "Переподключить", "clear": "Очистить",
         "copy": "Копировать", "paste": "Вставить", "connected": "Подключено", "connecting": "Подключение…",
         "offline": "Отключено", "not_connected": "Нет подключения", "password_prompt": "Пароль для {user}@{host}",
@@ -168,9 +172,13 @@ TRANSLATIONS: dict[str, dict[str, str]] = {
         "quick": "Quick connect", "host": "Host / IP", "port": "Port", "username": "Username",
         "protocol": "Protocol", "name": "Name", "password": "Password", "save_password": "Save password in Windows Credential Manager",
         "auth": "Auth type", "key_path": "Private key", "browse": "Browse", "group": "Group",
+        "all_groups": "All groups", "group_filter": "Group filter", "add_new_group": "Add new group…", "new_group_placeholder": "New group name", "create_group": "Add", "move_up": "Up", "move_down": "Down",
         "group_color": "Group color", "favorite": "Favorite", "tags": "Tags, comma-separated", "start_dir": "Start directory",
         "notes": "Notes", "tunnels": "SSH tunnels / port forwarding", "tunnels_hint": "Format: L 127.0.0.1:8080 127.0.0.1:80 or 8080 -> 127.0.0.1:80",
-        "serial_port": "Serial port", "serial_baud": "Baud rate", "terminal_hint": "Click the terminal and type like in PuTTY. Ctrl+C/Ctrl+X/Ctrl+O are sent to the server. Ctrl+Shift+C copies, Ctrl+Shift+V pastes.",
+        "serial_port": "Serial port", "serial_baud": "Baud rate", "terminal_hint": "Click the terminal and type like in PuTTY. Ctrl+C/Ctrl+X/Ctrl+O are sent to the server. Ctrl+Shift+C / Ctrl+Shift+X copies, Ctrl+Shift+V / Shift+Insert pastes. In TUI apps, the mouse wheel sends up/down arrows to the server.",
+        "split_horizontal": "Split ↔", "split_vertical": "Split ↕", "split_title": "Workspace",
+        "split_workspace": "Split workspace", "split_2_columns": "2 columns", "split_2_rows": "2 rows", "split_4": "4 panes",
+        "select_session": "Select session", "open_in_pane": "Open", "replace_pane": "Replace", "empty_pane": "Empty pane",
         "files": "Files", "disconnect": "Disconnect", "reconnect": "Reconnect", "clear": "Clear",
         "copy": "Copy", "paste": "Paste", "connected": "Connected", "connecting": "Connecting…",
         "offline": "Offline", "not_connected": "Not connected", "password_prompt": "Password for {user}@{host}",
@@ -285,6 +293,8 @@ class Session:
     tags: str = ""
     favorite: bool = False
     group_color: str = "#38bdf8"
+    order: int = 0
+    group_order: int = 0
     save_password: bool = False
     tunnels: str = ""
     serial_port: str = ""
@@ -308,6 +318,11 @@ class Session:
             clean["serial_baud"] = int(clean.get("serial_baud", 9600))
         except Exception:
             clean["serial_baud"] = 9600
+        for _k in ("order", "group_order"):
+            try:
+                clean[_k] = int(clean.get(_k, 0))
+            except Exception:
+                clean[_k] = 0
         return cls(**clean)
 
     def safe_dict(self) -> dict[str, Any]:
@@ -381,27 +396,103 @@ class SessionStore:
         try:
             data = json.loads(self.path.read_text(encoding="utf-8"))
             rows = data.get("sessions", data if isinstance(data, list) else [])
-            self.sessions = [Session.from_dict(x) for x in rows if isinstance(x, dict)]
+            self.sessions = []
+            group_orders: dict[str, int] = {}
+            next_group_order = 0
+            for idx, row in enumerate(rows):
+                if not isinstance(row, dict):
+                    continue
+                session = Session.from_dict(row)
+                session.group = (session.group or "Основные").strip() or "Основные"
+                if "group_order" not in row:
+                    if session.group not in group_orders:
+                        group_orders[session.group] = next_group_order
+                        next_group_order += 10
+                    session.group_order = group_orders[session.group]
+                else:
+                    group_orders.setdefault(session.group, session.group_order)
+                if "order" not in row:
+                    session.order = idx * 10
+                self.sessions.append(session)
+            self.sessions.sort(key=lambda s: (s.group_order, s.order, s.name.lower()))
         except Exception:
             self.sessions = []
 
     def save(self) -> None:
+        self.sessions.sort(key=lambda s: (s.group_order, s.order, s.name.lower()))
         data = {"app": APP_NAME, "version": APP_VERSION, "sessions": [s.safe_dict() for s in self.sessions]}
         self.path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
 
+    def group_names(self) -> list[str]:
+        seen: dict[str, int] = {}
+        for s in self.sessions:
+            group = (s.group or "Основные").strip() or "Основные"
+            seen[group] = min(seen.get(group, s.group_order), s.group_order)
+        return [g for g, _ in sorted(seen.items(), key=lambda item: (item[1], item[0].lower()))]
+
+    def _group_order_for(self, group: str) -> int:
+        group = (group or "Основные").strip() or "Основные"
+        orders = [s.group_order for s in self.sessions if (s.group or "Основные") == group]
+        if orders:
+            return min(orders)
+        return (max([s.group_order for s in self.sessions], default=-10) + 10)
+
+    def _next_order_in_group(self, group: str) -> int:
+        group = (group or "Основные").strip() or "Основные"
+        return max([s.order for s in self.sessions if (s.group or "Основные") == group], default=-10) + 10
+
     def upsert(self, session: Session) -> None:
         session.password = ""
+        session.group = (session.group or "Основные").strip() or "Основные"
         for i, existing in enumerate(self.sessions):
             if existing.id == session.id:
+                if (existing.group or "Основные") == session.group:
+                    session.group_order = existing.group_order
+                    session.order = existing.order
+                else:
+                    session.group_order = self._group_order_for(session.group)
+                    session.order = self._next_order_in_group(session.group)
                 self.sessions[i] = session
                 self.save()
                 return
+        session.group_order = self._group_order_for(session.group)
+        session.order = self._next_order_in_group(session.group)
         self.sessions.append(session)
-        self.sessions.sort(key=lambda s: (not s.favorite, s.group.lower(), s.name.lower()))
         self.save()
 
     def delete(self, session_id: str) -> None:
         self.sessions = [s for s in self.sessions if s.id != session_id]
+        self.save()
+
+    def move_group(self, group: str, direction: int) -> None:
+        groups = self.group_names()
+        if group not in groups:
+            return
+        idx = groups.index(group)
+        new_idx = max(0, min(len(groups) - 1, idx + direction))
+        if new_idx == idx:
+            return
+        other = groups[new_idx]
+        order_a = self._group_order_for(group)
+        order_b = self._group_order_for(other)
+        for s in self.sessions:
+            if (s.group or "Основные") == group:
+                s.group_order = order_b
+            elif (s.group or "Основные") == other:
+                s.group_order = order_a
+        self.save()
+
+    def move_session(self, session_id: str, direction: int) -> None:
+        session = next((s for s in self.sessions if s.id == session_id), None)
+        if session is None:
+            return
+        group = session.group or "Основные"
+        rows = sorted([s for s in self.sessions if (s.group or "Основные") == group], key=lambda s: (s.order, s.name.lower()))
+        idx = next((i for i, s in enumerate(rows) if s.id == session_id), -1)
+        new_idx = max(0, min(len(rows) - 1, idx + direction))
+        if idx < 0 or new_idx == idx:
+            return
+        rows[idx].order, rows[new_idx].order = rows[new_idx].order, rows[idx].order
         self.save()
 
 
@@ -567,16 +658,246 @@ class ScrollFrame(tk.Frame):
         self.after(50, lambda: bind_wheel_recursive(self, self.canvas))
 
 
-class DarkCombo(tk.OptionMenu):
-    def __init__(self, master: tk.Widget, variable: tk.StringVar, values: list[str], command: Optional[Callable[[str], None]] = None) -> None:
+class DarkDropdownBase(tk.Frame):
+    """Theme-colored dropdown control.
+
+    The previous version used a borderless Toplevel + Listbox. On some Windows/Tk
+    builds that popup was rendered as a blank gray rectangle. This version uses a
+    styled Tk menu instead, which is much more stable and still opens when the
+    user clicks anywhere on the field.
+    """
+    def __init__(self, master: tk.Widget, variable: tk.StringVar, values: list[str],
+                 command: Optional[Callable[[str], None]] = None, *, editable: bool = False) -> None:
+        super().__init__(master, bg=C["surface2"], highlightthickness=2,
+                         highlightbackground=C["border"], bd=1, relief="solid", cursor="hand2")
         self.variable = variable
-        self.values = values
-        super().__init__(master, variable, *values, command=command)
-        self.configure(bg=C["surface2"], fg=C["text"], activebackground=C["surface3"], activeforeground=C["text"],
-                       highlightthickness=2, highlightbackground=C["border"], relief="solid", bd=1, font=FONT_UI_BOLD)
-        menu = self["menu"]
-        menu.configure(bg=C["surface2"], fg=C["text"], activebackground=C["accent"], activeforeground="#041521",
-                       relief="solid", bd=1, font=FONT_UI)
+        self.values = list(values)
+        self.command = command
+        self.editable = editable
+        self.popup: Optional[tk.Menu] = None
+        self.configure(takefocus=True)
+        self.columnconfigure(0, weight=1)
+
+        if editable:
+            self.entry = tk.Entry(self, textvariable=self.variable, bg=C["surface2"], fg=C["text"],
+                                  insertbackground=C["text"], relief="flat", bd=0, font=FONT_UI_BOLD)
+            self.entry.grid(row=0, column=0, sticky="ew", padx=(10, 4), pady=7)
+            self.entry.bind("<Button-1>", lambda _e: self.after_idle(self.open_popup), add="+")
+            self.entry.bind("<Alt-Down>", lambda e: (self.open_popup(), "break"), add="+")
+        else:
+            self.label = tk.Label(self, textvariable=self.variable, bg=C["surface2"], fg=C["text"],
+                                  anchor="w", font=FONT_UI_BOLD, padx=10)
+            self.label.grid(row=0, column=0, sticky="ew", pady=7)
+
+        self.arrow = tk.Label(self, text="▾", bg=C["surface2"], fg=C["muted"], font=FONT_UI_BOLD,
+                              padx=8, cursor="hand2")
+        self.arrow.grid(row=0, column=1, sticky="ns")
+
+        for w in (self, getattr(self, "label", None), getattr(self, "entry", None), self.arrow):
+            if w is not None:
+                w.bind("<Button-1>", lambda _e: self.open_popup(), add="+")
+                w.bind("<Enter>", lambda _e: self._hover(True), add="+")
+                w.bind("<Leave>", lambda _e: self._hover(False), add="+")
+        self.bind("<Escape>", lambda _e: self.close_popup(), add="+")
+
+    def _hover(self, active: bool) -> None:
+        bg = C["surface3"] if active else C["surface2"]
+        try:
+            self.configure(bg=bg)
+            for w in (getattr(self, "label", None), getattr(self, "entry", None), self.arrow):
+                if w is not None:
+                    w.configure(bg=bg)
+        except Exception:
+            pass
+
+    def set_values(self, values: list[str]) -> None:
+        self.values = list(values)
+        if self.variable.get() not in self.values and self.values:
+            self.variable.set(self.values[0])
+        self.close_popup()
+
+    def open_popup(self) -> None:
+        self.close_popup()
+        self.focus_set()
+        menu = tk.Menu(self, tearoff=0, bg=C["surface2"], fg=C["text"],
+                       activebackground=C["accent"], activeforeground="#041521",
+                       disabledforeground=C["muted"], relief="solid", bd=1,
+                       borderwidth=1, font=FONT_UI_BOLD)
+        self.popup = menu
+
+        if not self.values:
+            menu.add_command(label="—", state="disabled")
+        else:
+            current = self.variable.get()
+            for value in self.values:
+                label = f"✓ {value}" if value == current else f"  {value}"
+                menu.add_command(label=label, command=lambda v=value: self._choose(v))
+
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        try:
+            # tk_popup grabs and releases the pointer correctly on Windows.
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+
+    def _choose(self, value: str) -> None:
+        self.variable.set(value)
+        if self.command:
+            self.command(value)
+        self.close_popup()
+
+    def close_popup(self) -> None:
+        try:
+            if self.popup is not None:
+                self.popup.unpost()
+                self.popup.destroy()
+        except Exception:
+            pass
+        self.popup = None
+
+    def _close_if_focus_left(self) -> None:
+        self.close_popup()
+
+
+class DarkCombo(DarkDropdownBase):
+    def __init__(self, master: tk.Widget, variable: tk.StringVar, values: list[str], command: Optional[Callable[[str], None]] = None) -> None:
+        super().__init__(master, variable, values, command, editable=False)
+
+
+class DarkEditableCombo(DarkDropdownBase):
+    def __init__(self, master: tk.Widget, variable: tk.StringVar, values: list[str]) -> None:
+        super().__init__(master, variable, values, editable=True)
+
+
+class GroupPicker(tk.Frame):
+    """Non-editable themed group selector with an inline "add group" mode.
+
+    Directly editable comboboxes can put Tk into text-edit mode on Windows and
+    may crash in some Tk builds when the menu is opened from the insertion
+    cursor area. This widget only opens a menu for existing groups; new groups
+    are added through an explicit inline mini-form.
+    """
+    def __init__(self, master: tk.Widget, variable: tk.StringVar, values: list[str],
+                 on_change: Optional[Callable[[str], None]] = None) -> None:
+        super().__init__(master, bg=C["surface"])
+        self.variable = variable
+        self.values = list(dict.fromkeys([v for v in values if str(v).strip()]))
+        self.on_change = on_change
+        if not self.values:
+            self.values = ["Основные" if CURRENT_LANGUAGE == "ru" else "Default"]
+        if not str(self.variable.get()).strip():
+            self.variable.set(self.values[0])
+        self.menu: Optional[tk.Menu] = None
+        self._build_display()
+
+    def _build_display(self) -> None:
+        for child in self.winfo_children():
+            child.destroy()
+        self.columnconfigure(0, weight=1)
+        self.display = tk.Frame(self, bg=C["surface2"], highlightthickness=2,
+                                highlightbackground=C["border"], bd=1, relief="solid", cursor="hand2")
+        self.display.grid(row=0, column=0, sticky="ew")
+        self.display.columnconfigure(0, weight=1)
+        self.label = tk.Label(self.display, textvariable=self.variable, bg=C["surface2"], fg=C["text"],
+                              anchor="w", font=FONT_UI_BOLD, padx=10, cursor="hand2")
+        self.label.grid(row=0, column=0, sticky="ew", pady=7)
+        self.arrow = tk.Label(self.display, text="▾", bg=C["surface2"], fg=C["muted"],
+                              font=FONT_UI_BOLD, padx=8, cursor="hand2")
+        self.arrow.grid(row=0, column=1, sticky="ns")
+        for w in (self, self.display, self.label, self.arrow):
+            w.bind("<Button-1>", self._open_menu, add="+")
+            w.bind("<Enter>", lambda _e: self._hover(True), add="+")
+            w.bind("<Leave>", lambda _e: self._hover(False), add="+")
+
+    def _hover(self, active: bool) -> None:
+        bg = C["surface3"] if active else C["surface2"]
+        for w in (getattr(self, "display", None), getattr(self, "label", None), getattr(self, "arrow", None)):
+            try:
+                w.configure(bg=bg)
+            except Exception:
+                pass
+
+    def set_values(self, values: list[str]) -> None:
+        self.values = list(dict.fromkeys([v for v in values if str(v).strip()]))
+        current = str(self.variable.get()).strip()
+        if current and current not in self.values:
+            self.values.append(current)
+
+    def _open_menu(self, event: Optional[tk.Event] = None) -> str:
+        try:
+            if self.menu is not None:
+                self.menu.unpost(); self.menu.destroy()
+        except Exception:
+            pass
+        menu = tk.Menu(self, tearoff=0, bg=C["surface2"], fg=C["text"],
+                       activebackground=C["accent"], activeforeground="#041521",
+                       disabledforeground=C["muted"], relief="solid", bd=1,
+                       borderwidth=1, font=FONT_UI_BOLD)
+        self.menu = menu
+        current = str(self.variable.get()).strip()
+        values = self.values or [current or ("Основные" if CURRENT_LANGUAGE == "ru" else "Default")]
+        for value in values:
+            label = f"✓ {value}" if value == current else f"  {value}"
+            menu.add_command(label=label, command=lambda v=value: self._choose(v))
+        menu.add_separator()
+        menu.add_command(label=t("add_new_group"), command=self._show_add_form)
+        x = self.winfo_rootx()
+        y = self.winfo_rooty() + self.winfo_height()
+        try:
+            menu.tk_popup(x, y)
+        finally:
+            try:
+                menu.grab_release()
+            except Exception:
+                pass
+        return "break"
+
+    def _choose(self, value: str) -> None:
+        value = str(value).strip()
+        if value:
+            self.variable.set(value)
+            if self.on_change:
+                self.on_change(value)
+        try:
+            if self.menu is not None:
+                self.menu.unpost(); self.menu.destroy()
+        except Exception:
+            pass
+        self.menu = None
+
+    def _show_add_form(self) -> None:
+        for child in self.winfo_children():
+            child.destroy()
+        self.columnconfigure(0, weight=1)
+        self.new_var = tk.StringVar()
+        box = tk.Frame(self, bg=C["surface2"], highlightthickness=2, highlightbackground=C["accent"], bd=1, relief="solid")
+        box.grid(row=0, column=0, sticky="ew")
+        box.columnconfigure(0, weight=1)
+        entry = tk.Entry(box, textvariable=self.new_var, bg=C["surface2"], fg=C["text"], insertbackground=C["text"],
+                         relief="flat", bd=0, font=FONT_UI_BOLD)
+        entry.grid(row=0, column=0, sticky="ew", padx=(10, 6), pady=7)
+        entry.insert(0, t("new_group_placeholder"))
+        entry.selection_range(0, "end")
+        AppButton(box, "✓", self._commit_new_group, kind="primary", width=2, padx=3, pady=2, font=("Segoe UI Symbol", 9, "bold")).grid(row=0, column=1, padx=(0, 4), pady=4)
+        AppButton(box, "×", self._build_display, kind="ghost", width=2, padx=3, pady=2, font=("Segoe UI Symbol", 9, "bold")).grid(row=0, column=2, padx=(0, 4), pady=4)
+        entry.bind("<Return>", lambda _e: (self._commit_new_group(), "break"), add="+")
+        entry.bind("<Escape>", lambda _e: (self._build_display(), "break"), add="+")
+        entry.focus_set()
+
+    def _commit_new_group(self) -> None:
+        value = str(getattr(self, "new_var", tk.StringVar()).get()).strip()
+        if not value or value == t("new_group_placeholder"):
+            self._build_display(); return
+        if value not in self.values:
+            self.values.append(value)
+        self.variable.set(value)
+        if self.on_change:
+            self.on_change(value)
+        self._build_display()
 
 
 class PaletteColorPicker(tk.Frame):
@@ -742,6 +1063,30 @@ class TerminalView(tk.Frame):
         self.text.bind("<Control-Shift-KeyPress-C>", self.copy_selection, add="+")
         self.text.bind("<Control-Shift-KeyPress-V>", self.paste_clipboard, add="+")
         self.text.bind("<Button-1>", lambda _e: self.text.focus_set(), add="+")
+        # When a full-screen TUI program is open, the Tk Text widget must not
+        # scroll its local buffer. Otherwise nano/vim can appear as an empty
+        # black area after wheel scrolling. In alternate screen mode the wheel
+        # is converted to arrow keys and sent to the remote PTY.
+        self.text.bind("<MouseWheel>", self._on_mouse_wheel, add="+")
+        self.text.bind("<Button-4>", self._on_mouse_wheel, add="+")
+        self.text.bind("<Button-5>", self._on_mouse_wheel, add="+")
+
+    def _on_mouse_wheel(self, event: tk.Event) -> Optional[str]:
+        if not self.in_alt_screen:
+            return None
+        try:
+            delta = int(getattr(event, "delta", 0) or 0)
+            num = int(getattr(event, "num", 0) or 0)
+            up = (delta > 0) or num == 4
+            # Most TUI programs, including nano without mouse reporting, react
+            # predictably to arrow keys. Send a few lines per wheel notch.
+            seq = "\x1b[A" if up else "\x1b[B"
+            repeat = 4
+            self.send_callback((seq * repeat).encode("latin1"))
+        except Exception:
+            pass
+        self.text.yview_moveto(0)
+        return "break"
 
     def write_info(self, msg: str) -> None:
         self.feed("\r\n" + msg + "\r\n")
@@ -751,7 +1096,7 @@ class TerminalView(tk.Frame):
         if self.screen is not None:
             try:
                 self.screen.reset()
-                self.screen.resize(self.rows, self.cols)
+                self.screen.resize(lines=self.rows, columns=self.cols)
             except Exception:
                 pass
         self.text.delete("1.0", "end")
@@ -764,7 +1109,7 @@ class TerminalView(tk.Frame):
         if self.screen is not None:
             try:
                 self.screen.reset()
-                self.screen.resize(self.rows, self.cols)
+                self.screen.resize(lines=self.rows, columns=self.cols)
             except Exception:
                 pass
 
@@ -836,14 +1181,20 @@ class TerminalView(tk.Frame):
             return
         display = "\n".join(self.screen.display)
         self.text.delete("1.0", "end")
-        self.text.insert("1.0", display)
+        self.text.insert("1.0", display + "\n")
+        try:
+            self.text.configure(width=self.cols, height=self.rows)
+        except Exception:
+            pass
         try:
             y = int(getattr(self.screen.cursor, "y", 0)) + 1
             x = int(getattr(self.screen.cursor, "x", 0))
             self.text.mark_set("insert", f"{y}.{x}")
-            self.text.see("insert")
+            # TUI applications use a fixed viewport. Do not auto-scroll the Tk Text
+            # widget to the cursor: with nano/vim/htop it can expose blank space.
+            self.text.yview_moveto(0)
         except Exception:
-            self.text.see("end")
+            self.text.yview_moveto(0)
 
     def _on_resize(self, _event: tk.Event | None = None) -> None:
         try:
@@ -858,7 +1209,7 @@ class TerminalView(tk.Frame):
                 self.app.settings.cols = cols
                 self.app.settings.rows = rows
                 if self.screen is not None:
-                    self.screen.resize(rows, cols)
+                    self.screen.resize(lines=rows, columns=cols)
                 self.event_generate("<<TerminalResize>>")
                 self._schedule_render()
         except Exception:
@@ -890,6 +1241,19 @@ class TerminalView(tk.Frame):
         return "break"
 
     def _on_key(self, event: tk.Event) -> str:
+        state = getattr(event, "state", 0)
+        ctrl = bool(state & 0x0004)
+        shift = bool(state & 0x0001)
+        ks = str(event.keysym)
+        if ctrl and shift and ks.lower() in {"c", "x"}:
+            self.copy_selection(event)
+            return "break"
+        if (ctrl and shift and ks.lower() == "v") or (shift and ks == "Insert"):
+            self.paste_clipboard(event)
+            return "break"
+        if ctrl and ks == "Insert":
+            self.copy_selection(event)
+            return "break"
         data = self._event_to_bytes(event)
         if data:
             self.send_callback(data)
@@ -1050,21 +1414,30 @@ class TerminalTab(tk.Frame):
         self.after(100, self.connect_async)
 
     def _build(self) -> None:
+        # Two-line responsive toolbar: the action buttons no longer collapse into
+        # thin broken controls when the application is not maximized.
         toolbar = tk.Frame(self, bg=C["surface"], padx=8, pady=7, highlightthickness=1, highlightbackground=C["border"])
         toolbar.pack(fill="x")
-        self.status = tk.Label(toolbar, text=t("connecting"), bg=C["surface"], fg=C["muted"], font=FONT_UI)
-        self.status.pack(side="left")
+        top = tk.Frame(toolbar, bg=C["surface"])
+        top.pack(fill="x")
+        self.status = tk.Label(top, text=t("connecting"), bg=C["surface"], fg=C["muted"], font=FONT_UI)
+        self.status.pack(side="left", padx=(0, 10))
         self.preset_var = tk.StringVar(value=t("select_preset"))
-        self.preset_combo = DarkCombo(toolbar, self.preset_var, self._preset_names())
-        self.preset_combo.pack(side="left", padx=(14, 4))
-        AppButton(toolbar, t("run_preset"), self.run_selected_preset, kind="primary").pack(side="left", padx=3)
-        AppButton(toolbar, t("disconnect"), self.disconnect, kind="danger").pack(side="right", padx=3)
-        AppButton(toolbar, t("clear"), self.clear, kind="ghost").pack(side="right", padx=3)
-        AppButton(toolbar, t("paste"), self.paste, kind="ghost").pack(side="right", padx=3)
-        AppButton(toolbar, t("copy"), self.copy, kind="ghost").pack(side="right", padx=3)
-        AppButton(toolbar, t("reconnect"), self.reconnect, kind="ghost").pack(side="right", padx=3)
+        self.preset_combo = DarkCombo(top, self.preset_var, self._preset_names())
+        self.preset_combo.pack(side="left", fill="x", expand=True, padx=(4, 6))
+        AppButton(top, t("run_preset"), self.run_selected_preset, kind="primary").pack(side="left", padx=3)
+
+        actions = tk.Frame(toolbar, bg=C["surface"])
+        actions.pack(fill="x", pady=(7, 0))
         if self.session.protocol == "ssh":
-            AppButton(toolbar, t("files"), self.open_files, kind="primary").pack(side="right", padx=3)
+            AppButton(actions, t("files"), self.open_files, kind="primary").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("split_horizontal"), lambda: self.app.open_split_workspace(self.session, "horizontal"), kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("split_vertical"), lambda: self.app.open_split_workspace(self.session, "vertical"), kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("reconnect"), self.reconnect, kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("copy"), self.copy, kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("paste"), self.paste, kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("clear"), self.clear, kind="ghost").pack(side="left", padx=3, pady=2)
+        AppButton(actions, t("disconnect"), self.disconnect, kind="danger").pack(side="left", padx=3, pady=2)
         self.term = TerminalView(self, self.app, self.send_bytes)
         self.term.pack(fill="both", expand=True)
         self.term.bind("<<TerminalResize>>", lambda _e: self.resize_remote(), add="+")
@@ -1076,12 +1449,10 @@ class TerminalTab(tk.Frame):
 
     def refresh_presets(self) -> None:
         try:
-            menu = self.preset_combo["menu"]
-            menu.delete(0, "end")
-            for name in self._preset_names():
-                menu.add_command(label=name, command=lambda v=name: self.preset_var.set(v))
-            if self.preset_var.get() not in self._preset_names():
-                self.preset_var.set(self._preset_names()[0])
+            names = self._preset_names()
+            self.preset_combo.set_values(names)
+            if self.preset_var.get() not in names:
+                self.preset_var.set(names[0])
         except Exception:
             pass
 
@@ -1359,6 +1730,187 @@ class TerminalTab(tk.Frame):
         self.app.open_remote_file_browser(self)
 
 
+
+class SplitPane(tk.Frame):
+    def __init__(self, master: tk.Widget, workspace: "SplitTerminalPage", index: int, initial_session: Optional[Session] = None) -> None:
+        super().__init__(master, bg=C["bg"], highlightthickness=1, highlightbackground=C["border"])
+        self.workspace = workspace
+        self.app = workspace.app
+        self.index = index
+        self.current_session: Optional[Session] = None
+        self.terminal: Optional[TerminalTab] = None
+        self._build()
+        if initial_session is not None:
+            self.after(80, lambda s=initial_session: self.open_session(s))
+
+    def _label_for(self, session: Session) -> str:
+        user = f"{session.username}@" if session.username else ""
+        return f"{session.name}  —  {session.protocol.upper()} {user}{session.host}:{session.port}"
+
+    def _session_labels(self) -> dict[str, Session]:
+        result: dict[str, Session] = {}
+        for session in self.app.store.sessions:
+            label = self._label_for(session)
+            # Names can repeat. Keep labels unique without exposing internal ids.
+            if label in result:
+                label = f"{label} #{session.id[:6]}"
+            result[label] = session
+        return result
+
+    def _build(self) -> None:
+        self.header = tk.Frame(self, bg=C["surface"], padx=6, pady=5)
+        self.header.pack(fill="x")
+        tk.Label(self.header, text=f"{self.index + 1}", bg=C["surface"], fg=C["accent2"], font=FONT_UI_BOLD).pack(side="left", padx=(0, 6))
+        self.session_map = self._session_labels()
+        values = list(self.session_map.keys()) or [t("no_sessions")]
+        self.var = tk.StringVar(value=values[0] if values else t("select_session"))
+        self.combo = DarkCombo(self.header, self.var, values)
+        self.combo.pack(side="left", fill="x", expand=True, padx=(0, 6))
+        AppButton(self.header, t("open_in_pane"), self.open_selected, kind="primary", padx=8, pady=4).pack(side="left")
+        AppButton(self.header, "×", self.close_terminal, kind="ghost", padx=8, pady=4).pack(side="left", padx=(4, 0))
+        self.body = tk.Frame(self, bg=C["term_bg"])
+        self.body.pack(fill="both", expand=True)
+        self.placeholder = tk.Label(self.body, text=t("empty_pane"), bg=C["term_bg"], fg=C["muted"], font=("Segoe UI", 14))
+        self.placeholder.place(relx=0.5, rely=0.5, anchor="center")
+
+    def refresh_sessions(self) -> None:
+        self.session_map = self._session_labels()
+        values = list(self.session_map.keys()) or [t("no_sessions")]
+        try:
+            menu = self.combo["menu"]
+            menu.delete(0, "end")
+            for value in values:
+                menu.add_command(label=value, command=lambda v=value: self.var.set(v))
+            if self.var.get() not in values:
+                self.var.set(values[0])
+        except Exception:
+            pass
+
+    def open_selected(self) -> None:
+        self.refresh_sessions()
+        session = self.session_map.get(self.var.get())
+        if session is not None:
+            self.open_session(session)
+
+    def open_session(self, session: Session) -> None:
+        self.close_terminal()
+        self.current_session = session
+        try:
+            self.placeholder.place_forget()
+        except Exception:
+            pass
+        self.terminal = TerminalTab(self.body, self.app, session)
+        self.terminal.pack(fill="both", expand=True)
+        # Keep the combo in sync with the active pane session.
+        for label, value in self.session_map.items():
+            if value.id == session.id:
+                self.var.set(label)
+                break
+
+    def close_terminal(self) -> None:
+        if self.terminal is not None:
+            try:
+                self.terminal.disconnect()
+            except Exception:
+                pass
+            try:
+                self.terminal.destroy()
+            except Exception:
+                pass
+        self.terminal = None
+        self.current_session = None
+        try:
+            self.placeholder.place(relx=0.5, rely=0.5, anchor="center")
+        except Exception:
+            pass
+
+    def disconnect(self) -> None:
+        self.close_terminal()
+
+
+class SplitTerminalPage(tk.Frame):
+    """Workspace with independent terminal panes.
+
+    Unlike the old duplicate-split implementation, each pane can open a
+    different saved connection. The layout can be switched between 2 columns,
+    2 rows and a 2x2 grid for four simultaneous connections.
+    """
+    def __init__(self, master: tk.Widget, app: "OrionSSHApp", session: Optional[Session] = None, orientation: str = "horizontal") -> None:
+        super().__init__(master, bg=C["bg"])
+        self.app = app
+        self.initial_session = session
+        self.layout = "2_rows" if orientation == "vertical" else "2_columns"
+        self.panes: list[SplitPane] = []
+        self._build()
+
+    def _build(self) -> None:
+        top = tk.Frame(self, bg=C["surface"], padx=8, pady=7, highlightthickness=1, highlightbackground=C["border"])
+        top.pack(fill="x")
+        tk.Label(top, text=t("split_workspace"), bg=C["surface"], fg=C["text"], font=FONT_UI_BOLD).pack(side="left", padx=(0, 10))
+        AppButton(top, t("split_2_columns"), lambda: self.set_layout("2_columns"), kind="ghost", padx=8, pady=4).pack(side="left", padx=3)
+        AppButton(top, t("split_2_rows"), lambda: self.set_layout("2_rows"), kind="ghost", padx=8, pady=4).pack(side="left", padx=3)
+        AppButton(top, t("split_4"), lambda: self.set_layout("4"), kind="ghost", padx=8, pady=4).pack(side="left", padx=3)
+        self.area = tk.Frame(self, bg=C["bg"])
+        self.area.pack(fill="both", expand=True)
+        self.set_layout(self.layout, preserve=False)
+
+    def _current_sessions(self) -> list[Optional[Session]]:
+        sessions: list[Optional[Session]] = []
+        for pane in self.panes:
+            sessions.append(pane.current_session)
+        if not sessions and self.initial_session is not None:
+            sessions.append(self.initial_session)
+        return sessions
+
+    def set_layout(self, layout: str, preserve: bool = True) -> None:
+        keep = self._current_sessions() if preserve else ([self.initial_session] if self.initial_session is not None else [])
+        for pane in self.panes:
+            try:
+                pane.disconnect()
+            except Exception:
+                pass
+            try:
+                pane.destroy()
+            except Exception:
+                pass
+        self.panes = []
+        for child in self.area.winfo_children():
+            try: child.destroy()
+            except Exception: pass
+        for i in range(4):
+            self.area.grid_rowconfigure(i, weight=0)
+            self.area.grid_columnconfigure(i, weight=0)
+        self.layout = layout
+        if layout == "4":
+            count, positions = 4, [(0, 0), (0, 1), (1, 0), (1, 1)]
+            for r in (0, 1): self.area.grid_rowconfigure(r, weight=1, uniform="split_rows")
+            for c in (0, 1): self.area.grid_columnconfigure(c, weight=1, uniform="split_cols")
+        elif layout == "2_rows":
+            count, positions = 2, [(0, 0), (1, 0)]
+            for r in (0, 1): self.area.grid_rowconfigure(r, weight=1, uniform="split_rows")
+            self.area.grid_columnconfigure(0, weight=1)
+        else:
+            count, positions = 2, [(0, 0), (0, 1)]
+            self.area.grid_rowconfigure(0, weight=1)
+            for c in (0, 1): self.area.grid_columnconfigure(c, weight=1, uniform="split_cols")
+        for idx in range(count):
+            initial = keep[idx] if idx < len(keep) else None
+            pane = SplitPane(self.area, self, idx, initial)
+            r, c = positions[idx]
+            pane.grid(row=r, column=c, sticky="nsew", padx=4, pady=4)
+            self.panes.append(pane)
+
+    def refresh_sessions(self) -> None:
+        for pane in self.panes:
+            pane.refresh_sessions()
+
+    def disconnect(self) -> None:
+        for pane in self.panes:
+            try:
+                pane.disconnect()
+            except Exception:
+                pass
+
 class SessionEditor(tk.Frame):
     def __init__(self, master: tk.Widget, app: "OrionSSHApp", session: Optional[Session] = None) -> None:
         super().__init__(master, bg=C["bg"])
@@ -1418,7 +1970,11 @@ class SessionEditor(tk.Frame):
         self._entry(key_box, "key_path").grid(row=0, column=0, sticky="ew", ipady=6)
         AppButton(key_box, t("browse"), self._browse_key, kind="ghost").grid(row=0, column=1, padx=(8, 0))
         self._row(card, row, t("key_path"), key_box); row += 1
-        self._row(card, row, t("group"), self._entry(card, "group")); row += 1
+        group_values = self.app.store.group_names()
+        current_group = str(self.vars["group"].get()).strip() or "Основные"
+        if current_group not in group_values:
+            group_values.append(current_group)
+        self._row(card, row, t("group"), GroupPicker(card, self.vars["group"], group_values or ["Основные"])); row += 1
         self._row(card, row, t("group_color"), PaletteColorPicker(card, self.vars["group_color"], columns=12)); row += 1
         for label, key in [(t("tags"), "tags"), (t("start_dir"), "start_dir"), (t("serial_port"), "serial_port"), (t("serial_baud"), "serial_baud")]:
             self._row(card, row, label, self._entry(card, key)); row += 1
@@ -1479,6 +2035,7 @@ class SessionEditor(tk.Frame):
             color=color, group_color=color, notes=self.notes.get("1.0", "end-1c").strip(), protocol=str(self.vars["protocol"].get()),
             tags=str(self.vars["tags"].get()).strip(), favorite=bool(self.vars["favorite"].get()), save_password=bool(self.vars["save_password"].get()),
             tunnels=self.tunnels.get("1.0", "end-1c").strip(), serial_port=str(self.vars["serial_port"].get()).strip(), serial_baud=baud,
+            order=self.session.order if self.session else 0, group_order=self.session.group_order if self.session else 0,
         )
         password = str(self.vars["password"].get())
         if password and password != "********" and s.save_password:
@@ -1680,13 +2237,49 @@ class ContactsPage(tk.Frame):
         sf = ScrollFrame(self, bg=C["bg"]); sf.pack(fill="both", expand=True)
         card = tk.Frame(sf.content, bg=C["surface"], padx=24, pady=20, highlightthickness=1, highlightbackground=C["border"])
         card.pack(fill="both", expand=True, padx=18, pady=18)
-        tk.Label(card, text=t("support_title"), bg=C["surface"], fg=C["text"], font=FONT_TITLE).pack(anchor="w")
-        tk.Label(card, text=self.contacts.get("support_text_ru" if self.app.settings.language == "ru" else "support_text_en", t("support_body")), bg=C["surface"], fg=C["muted"], font=FONT_UI, wraplength=840, justify="left").pack(anchor="w", fill="x", pady=(8, 16))
+        title = "Справка и контакты" if self.app.settings.language == "ru" else "Help and contacts"
+        tk.Label(card, text=title, bg=C["surface"], fg=C["text"], font=FONT_TITLE).pack(anchor="w")
+        subtitle = ("Краткая справка по основным функциям OrionSSH и контакты поддержки." if self.app.settings.language == "ru"
+                    else "Quick help for the main OrionSSH features and support contacts.")
+        tk.Label(card, text=subtitle, bg=C["surface"], fg=C["muted"], font=FONT_UI, wraplength=900, justify="left").pack(anchor="w", fill="x", pady=(8, 16))
+
+        help_card = tk.Frame(card, bg=C["surface2"], padx=16, pady=14, highlightthickness=1, highlightbackground=C["border"])
+        help_card.pack(fill="x", pady=(0, 16))
+        help_title = "Как пользоваться" if self.app.settings.language == "ru" else "How to use"
+        tk.Label(help_card, text=help_title, bg=C["surface2"], fg=C["accent2"], font=("Segoe UI Semibold", 14)).pack(anchor="w", pady=(0, 8))
+        for head, body in self._help_sections():
+            block = tk.Frame(help_card, bg=C["surface2"])
+            block.pack(fill="x", pady=5)
+            tk.Label(block, text=head, bg=C["surface2"], fg=C["text"], font=FONT_UI_BOLD).pack(anchor="w")
+            tk.Label(block, text=body, bg=C["surface2"], fg=C["muted"], font=FONT_UI, wraplength=900, justify="left").pack(anchor="w", fill="x", pady=(2, 0))
+
+        contact_title = "Контакты поддержки" if self.app.settings.language == "ru" else "Support contacts"
+        tk.Label(card, text=contact_title, bg=C["surface"], fg=C["text"], font=("Segoe UI Semibold", 15)).pack(anchor="w", pady=(0, 6))
+        tk.Label(card, text=self.contacts.get("support_text_ru" if self.app.settings.language == "ru" else "support_text_en", t("support_body")), bg=C["surface"], fg=C["muted"], font=FONT_UI, wraplength=900, justify="left").pack(anchor="w", fill="x", pady=(0, 10))
         for label, key in [(t("email"), "email"), (t("telegram"), "telegram_bot"), (t("website"), "website")]:
             self._row(card, label, self.contacts.get(key, ""))
         AppButton(card, t("cancel"), lambda: self.app.close_page(self), kind="ghost").pack(anchor="e", pady=(20, 0))
         self.status = tk.Label(card, text="", bg=C["surface"], fg=C["accent2"], font=FONT_UI); self.status.pack(anchor="w", fill="x", pady=(12, 0))
         self.after(100, lambda: bind_wheel_recursive(self, sf.canvas))
+
+    def _help_sections(self) -> list[tuple[str, str]]:
+        if self.app.settings.language == "ru":
+            return [
+                ("Подключения", "Нажмите «+ Новое», заполните хост, порт, пользователя и тип входа. Группу можно выбрать из списка или создать новую."),
+                ("Вкладки и несколько окон", "Кнопка ▶ открывает подключение. Кнопка ⧉ открывает ещё одну вкладку того же сервера. Split ↔ / Split ↕ создают рабочую область с несколькими независимыми панелями."),
+                ("Терминал", "Кликните в терминал и вводите команды как в PuTTY. Ctrl+C, Ctrl+X и другие сочетания передаются на сервер. Ctrl+Shift+C / Ctrl+Shift+X копируют, Ctrl+Shift+V вставляет."),
+                ("SFTP", "Кнопка «Файлы» открывает проводник сервера. Можно открывать папки, загружать, скачивать файлы и создавать каталоги."),
+                ("Пресеты команд", "Во вкладке «Пресеты» создайте одну команду или список команд. Затем выберите пресет в терминале и нажмите «Run»."),
+                ("Группы и порядок", "Фильтр групп показывает только нужные подключения. Стрелки у групп и карточек меняют порядок отображения."),
+            ]
+        return [
+            ("Sessions", "Click + New, enter host, port, username and authentication type. You can pick an existing group or type a new one."),
+            ("Tabs and split workspace", "▶ opens a connection. ⧉ opens another tab for the same server. Split ↔ / Split ↕ create a workspace with multiple independent panes."),
+            ("Terminal", "Click the terminal and type like in PuTTY. Ctrl+C, Ctrl+X and other shortcuts are sent to the server. Ctrl+Shift+C / Ctrl+Shift+X copy, Ctrl+Shift+V pastes."),
+            ("SFTP", "The Files button opens the server file manager. You can browse folders, upload, download and create directories."),
+            ("Command presets", "Create one command or a command list in Presets. Then select it in a terminal and press Run."),
+            ("Groups and order", "The group filter shows only matching sessions. Arrows near groups and cards change their display order."),
+        ]
 
     def _row(self, parent: tk.Widget, label: str, value: str) -> None:
         box = tk.Frame(parent, bg=C["surface2"], padx=14, pady=12, highlightthickness=1, highlightbackground=C["border"])
@@ -1937,6 +2530,8 @@ class OrionSSHApp(BASE_TK):
         style.map("Dark.Treeview", background=[("selected", C["accent"])], foreground=[("selected", "#06111d")])
         style.configure("Vertical.TScrollbar", background=C["surface3"], troughcolor=C["surface"], arrowcolor=C["text"], bordercolor=C["border"])
         style.configure("Horizontal.TScrollbar", background=C["surface3"], troughcolor=C["surface"], arrowcolor=C["text"], bordercolor=C["border"])
+        style.configure("Dark.TCombobox", fieldbackground=C["surface2"], background=C["surface2"], foreground=C["text"], bordercolor=C["border"], arrowcolor=C["text"], padding=6)
+        style.map("Dark.TCombobox", fieldbackground=[("readonly", C["surface2"])], foreground=[("readonly", C["text"])] )
 
     def _build(self) -> None:
         root = tk.Frame(self, bg=C["bg"]); root.pack(fill="both", expand=True)
@@ -1956,7 +2551,10 @@ class OrionSSHApp(BASE_TK):
         AppButton(btnrow, t("settings"), self.open_settings, kind="ghost").grid(row=1, column=0, sticky="ew", padx=(0, 4))
         AppButton(btnrow, t("contacts"), self.open_contacts, kind="ghost").grid(row=1, column=1, sticky="ew", padx=(4, 0))
         self.search = tk.StringVar(); self.search.trace_add("write", lambda *_: self.refresh_sessions())
-        tk.Entry(side, textvariable=self.search, bg=C["term_bg"], fg=C["text"], insertbackground=C["text"], relief="solid", bd=2, highlightthickness=2, highlightbackground=C["border"], font=FONT_UI).pack(fill="x", padx=14, pady=12, ipady=7)
+        tk.Entry(side, textvariable=self.search, bg=C["term_bg"], fg=C["text"], insertbackground=C["text"], relief="solid", bd=2, highlightthickness=2, highlightbackground=C["border"], font=FONT_UI).pack(fill="x", padx=14, pady=(12, 6), ipady=7)
+        self.group_filter = tk.StringVar(value=t("all_groups"))
+        self.group_filter_combo = DarkCombo(side, self.group_filter, [t("all_groups")], command=lambda _v: self.refresh_sessions())
+        self.group_filter_combo.pack(fill="x", padx=14, pady=(0, 12))
         list_outer = tk.Frame(side, bg=C["surface"]); list_outer.pack(fill="both", expand=True)
         self.session_canvas = tk.Canvas(list_outer, bg=C["surface"], highlightthickness=0)
         sc = ttk.Scrollbar(list_outer, orient="vertical", command=self.session_canvas.yview)
@@ -1974,52 +2572,108 @@ class OrionSSHApp(BASE_TK):
         self.home = HomePage(self.book.content, self); self.book.add(self.home, t("home"), closable=False)
         self.refresh_sessions()
 
+    def _refresh_group_filter_options(self) -> None:
+        if not hasattr(self, "group_filter_combo"):
+            return
+        current = self.group_filter.get() if hasattr(self, "group_filter") else t("all_groups")
+        values = [t("all_groups")] + self.store.group_names()
+        if current not in values:
+            current = t("all_groups")
+            self.group_filter.set(current)
+        try:
+            self.group_filter_combo.set_values(values)
+        except Exception:
+            pass
+
     def refresh_sessions(self) -> None:
-        for w in self.session_list.winfo_children(): w.destroy()
+        self._refresh_group_filter_options()
+        for w in self.session_list.winfo_children():
+            w.destroy()
         q = self.search.get().lower().strip() if hasattr(self, "search") else ""
-        sessions = [s for s in self.store.sessions if not q or q in " ".join([s.name, s.host, s.username, s.group, s.tags, s.notes, s.protocol]).lower()]
+        selected_group = self.group_filter.get() if hasattr(self, "group_filter") else t("all_groups")
+        sessions = []
+        for s in self.store.sessions:
+            haystack = " ".join([s.name, s.host, s.username, s.group, s.tags, s.notes, s.protocol]).lower()
+            if q and q not in haystack:
+                continue
+            if selected_group != t("all_groups") and (s.group or "Основные") != selected_group:
+                continue
+            sessions.append(s)
         if not sessions:
             tk.Label(self.session_list, text=t("no_sessions"), bg=C["surface"], fg=C["muted"], font=FONT_UI, padx=16, pady=14).pack(anchor="w")
             return
         grouped: dict[str, list[Session]] = {}
-        for s in sessions: grouped.setdefault(s.group or "Основные", []).append(s)
-        for group in sorted(grouped):
-            color = grouped[group][0].group_color or C["accent"]
-            row = tk.Frame(self.session_list, bg=C["surface"], padx=14, pady=6); row.pack(fill="x")
-            tk.Label(row, text="■", bg=C["surface"], fg=color, font=("Segoe UI", 8)).pack(side="left")
-            tk.Label(row, text=group.upper(), bg=C["surface"], fg=C["muted"], font=("Segoe UI Semibold", 8)).pack(side="left", padx=(5, 0))
-            for s in sorted(grouped[group], key=lambda x: (not x.favorite, x.name.lower())):
-                self._session_card(s)
+        for s in sessions:
+            grouped.setdefault(s.group or "Основные", []).append(s)
+        all_groups = self.store.group_names()
+        group_sort = {g: i for i, g in enumerate(all_groups)}
+        for group in sorted(grouped, key=lambda g: (group_sort.get(g, 9999), g.lower())):
+            rows = sorted(grouped[group], key=lambda x: (x.order, not x.favorite, x.name.lower()))
+            color = rows[0].group_color or C["accent"]
+            self._group_header(group, color)
+            for sess in rows:
+                self._session_card(sess)
+
+    def _group_header(self, group: str, color: str) -> None:
+        row = tk.Frame(self.session_list, bg=C["surface"], padx=14, pady=6)
+        row.pack(fill="x")
+        tk.Label(row, text="■", bg=C["surface"], fg=color, font=("Segoe UI", 8)).pack(side="left")
+        tk.Label(row, text=group.upper(), bg=C["surface"], fg=C["muted"], font=("Segoe UI Semibold", 8), anchor="w").pack(side="left", padx=(5, 0), fill="x", expand=True)
+        for text, cmd in [("↑", lambda g=group: self.move_group(g, -1)), ("↓", lambda g=group: self.move_group(g, 1))]:
+            btn = AppButton(row, text, cmd, kind="ghost", padx=4, pady=1, width=2, font=("Segoe UI Symbol", 8, "bold"))
+            btn.pack(side="right", padx=1)
+        bind_wheel_recursive(row, self.session_canvas)
+
+    def _fixed_button(self, parent: tk.Widget, text: str, command: Callable[[], None], kind: str = "ghost") -> tk.Widget:
+        holder = tk.Frame(parent, bg=C["surface2"], width=36, height=30)
+        holder.pack_propagate(False)
+        btn = AppButton(holder, text, command, kind=kind, width=2, padx=0, pady=0, font=("Segoe UI Symbol", 10, "bold"))
+        btn.pack(fill="both", expand=True)
+        return holder
 
     def _session_card(self, s: Session) -> None:
         frame = tk.Frame(self.session_list, bg=C["surface2"], padx=10, pady=8, highlightthickness=1, highlightbackground=s.group_color or C["border"], cursor="hand2")
         frame.pack(fill="x", padx=12, pady=5)
-        left = tk.Frame(frame, bg=C["surface2"]); left.pack(side="left", fill="both", expand=True)
+        frame.columnconfigure(0, weight=1, minsize=120)
+        frame.columnconfigure(1, weight=0, minsize=122)
+        left = tk.Frame(frame, bg=C["surface2"])
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         title = ("★ " if s.favorite else "") + s.name
-        tk.Label(left, text=title, bg=C["surface2"], fg=C["text"], font=FONT_UI_BOLD, anchor="w").pack(anchor="w", fill="x")
+        tk.Label(left, text=title, bg=C["surface2"], fg=C["text"], font=FONT_UI_BOLD, anchor="w", wraplength=155, justify="left").pack(anchor="w", fill="x")
         sub = f"{s.protocol.upper()}  {s.username + '@' if s.username else ''}{s.host}:{s.port}"
-        tk.Label(left, text=sub, bg=C["surface2"], fg=C["muted"], font=("Segoe UI", 9), anchor="w").pack(anchor="w", fill="x")
+        tk.Label(left, text=sub, bg=C["surface2"], fg=C["muted"], font=("Segoe UI", 9), anchor="w", wraplength=155, justify="left").pack(anchor="w", fill="x")
         if s.tags:
-            tk.Label(left, text="🏷 " + s.tags, bg=C["surface2"], fg=C["accent2"], font=("Segoe UI", 9), anchor="w", wraplength=210).pack(anchor="w", fill="x", pady=(2, 0))
+            tk.Label(left, text="🏷 " + s.tags, bg=C["surface2"], fg=C["accent2"], font=("Segoe UI", 9), anchor="w", wraplength=155, justify="left").pack(anchor="w", fill="x", pady=(2, 0))
         if s.notes:
             prev = s.notes.replace("\n", " ")[:90] + ("…" if len(s.notes) > 90 else "")
-            tk.Label(left, text=prev, bg=C["surface2"], fg=C["muted"], font=("Segoe UI", 9), anchor="w", wraplength=210, justify="left").pack(anchor="w", fill="x", pady=(2, 0))
-        right = tk.Frame(frame, bg=C["surface2"]); right.pack(side="right", padx=(8, 0))
-        for text, cmd, kind in [
-            ("▶", lambda s=s: self.open_session(s), "ghost"),
-            ("⧉", lambda s=s: self.open_session(s, force_new=True), "ghost"),
-            ("✎", lambda s=s: self.edit_session(s), "ghost"),
-            ("×", lambda s=s: self.delete_session(s), "danger"),
+            tk.Label(left, text=prev, bg=C["surface2"], fg=C["muted"], font=("Segoe UI", 9), anchor="w", wraplength=155, justify="left").pack(anchor="w", fill="x", pady=(2, 0))
+        right = tk.Frame(frame, bg=C["surface2"], width=118)
+        right.grid(row=0, column=1, sticky="ne")
+        top = tk.Frame(right, bg=C["surface2"]); top.pack(anchor="e")
+        bottom = tk.Frame(right, bg=C["surface2"]); bottom.pack(anchor="e", pady=(4, 0))
+        for holder in [
+            self._fixed_button(top, "▶", lambda s=s: self.open_session(s), "ghost"),
+            self._fixed_button(top, "⧉", lambda s=s: self.open_session(s, force_new=True), "ghost"),
+            self._fixed_button(top, "✎", lambda s=s: self.edit_session(s), "ghost"),
         ]:
-            holder = tk.Frame(right, bg=C["surface2"], width=42, height=42)
-            holder.pack(side="left", padx=3)
-            holder.pack_propagate(False)
-            btn = AppButton(holder, text, cmd, kind=kind, width=2)
-            btn.configure(padx=0, pady=0, font=("Segoe UI Symbol", 11, "bold"))
-            btn.pack(fill="both", expand=True)
+            holder.pack(side="left", padx=2)
+        for holder in [
+            self._fixed_button(bottom, "↑", lambda s=s: self.move_session(s, -1), "ghost"),
+            self._fixed_button(bottom, "↓", lambda s=s: self.move_session(s, 1), "ghost"),
+            self._fixed_button(bottom, "×", lambda s=s: self.delete_session(s), "danger"),
+        ]:
+            holder.pack(side="left", padx=2)
         for w in (frame, left):
             w.bind("<Double-1>", lambda _e: self.open_session(s), add="+")
         bind_wheel_recursive(frame, self.session_canvas)
+
+    def move_group(self, group: str, direction: int) -> None:
+        self.store.move_group(group, direction)
+        self.refresh_sessions()
+
+    def move_session(self, session: Session, direction: int) -> None:
+        self.store.move_session(session.id, direction)
+        self.refresh_sessions()
 
     def open_session(self, s: Session, force_new: bool = False) -> None:
         if not force_new and s.id in self.tabs:
@@ -2049,6 +2703,10 @@ class OrionSSHApp(BASE_TK):
     def open_presets(self) -> None:
         self.book.add(PresetsPage(self.book.content, self), t("presets"), closable=True, key="presets")
 
+    def open_split_workspace(self, session: Optional[Session] = None, orientation: str = "horizontal") -> None:
+        title = f"{t('split_title')}: {session.name}" if session is not None else t("split_title")
+        self.book.add(SplitTerminalPage(self.book.content, self, session, orientation), title, closable=True)
+
     def refresh_preset_controls(self) -> None:
         for tab in list(self.tabs.values()):
             try: tab.refresh_presets()
@@ -2065,6 +2723,8 @@ class OrionSSHApp(BASE_TK):
             page.disconnect()
             for sid, tab in list(self.tabs.items()):
                 if tab is page: self.tabs.pop(sid, None)
+        elif isinstance(page, SplitTerminalPage):
+            page.disconnect()
 
     def ask_password(self, prompt: str, allow_empty: bool = False) -> Optional[str]:
         result: dict[str, Optional[str]] = {"value": None}; ev = threading.Event()
