@@ -48,8 +48,8 @@ This Electron version replaces the old Tkinter terminal implementation and uses 
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/console.png" alt="OrionSSH terminal" width="420" />
-  <img src="docs/screenshots/sftp.png" alt="OrionSSH SFTP" width="420" />
+  <img src="docs/screenshots/console.png" alt="OrionSSH terminal" width="850" />
+  <img src="docs/screenshots/sftp.png" alt="OrionSSH SFTP" width="850" />
 </p>
 
 ## Requirements
