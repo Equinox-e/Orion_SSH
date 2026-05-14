@@ -42,17 +42,6 @@ This Electron version replaces the old Tkinter terminal implementation and uses 
 
 ## Screenshots
 
-Put your real screenshots here:
-
-```text
-docs/screenshots/home.png
-docs/screenshots/terminal.png
-docs/screenshots/sftp.png
-docs/screenshots/settings.png
-docs/screenshots/presets.png
-```
-
-Example:
 
 <p align="center">
   <img src="docs/screenshots/main.png" alt="OrionSSH main screen" width="850" />
