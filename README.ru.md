@@ -42,25 +42,14 @@ OrionSSH — desktop SSH-клиент с настоящим терминальн
 
 ## Скриншоты
 
-Положи свои реальные скриншоты сюда:
-
-```text
-docs/screenshots/home.png
-docs/screenshots/terminal.png
-docs/screenshots/sftp.png
-docs/screenshots/settings.png
-docs/screenshots/presets.png
-```
-
-Пример:
 
 <p align="center">
   <img src="docs/screenshots/main.png" alt="Главное окно OrionSSH" width="850" />
 </p>
 
 <p align="center">
-  <img src="docs/screenshots/console.png" alt="Терминал OrionSSH" width="420" />
-  <img src="docs/screenshots/sftp.png" alt="SFTP OrionSSH" width="420" />
+  <img src="docs/screenshots/console.png" alt="Терминал OrionSSH" width="850" />
+  <img src="docs/screenshots/sftp.png" alt="SFTP OrionSSH" width="850" />
 </p>
 
 ## Требования
